@@ -1,0 +1,250 @@
+Project: https://github.com/samuelwegner/tic-tac-toe-3d
+Date: 16-Jan-2019
+Author: Samuel Wegner
+Purpose: This document contains a summary of the web service API for the Tic-Tac-Toe 3D game.
+
+
+General notes:
+All server responses have the "success" and "message" fields. Some also include the "loginRequired" field.
+"success" will be true if the request was successful, or false if there was an error.
+"message" is the relevant error message, if any. It will be an empty string if "success" == true.
+"loginRequired" is a boolean flag indicating whether the client needs to re-authenticate their user login. Any request type that can send this field in the response requires a current login session for success. Note that this flag will never be true if "success" == true.
+If "loginRequired" == true, you should send a LOGIN USER, REGISTER USER, or CHANGE USER PASSWORD request, then resend the other failed request after a successful login.
+Many response types can include other fields, but typically if "success" == false, all other fields except "message" and "loginRequired" will be omitted. Exceptions will be specifically noted.
+
+
+REGISTER USER
+File: server/register-user.php
+
+Client request JSON:
+{
+	"userId": string,
+	"userName": string,
+	"password": string
+}
+Details:
+"userId" is the login user ID. Length must be 3-24 characters or the request will fail.
+"userName" is the user's display name. Length must be 1-50 characters or the request will fail.
+"password" is the raw password string. Length must be 8-128 characters or the request will fail.
+You can let the server handle validation and just display the error message.
+
+Server response JSON:
+{
+	"success": boolean,
+	"message": string
+}
+Details:
+If "success" == true, the user will also be considered logged in.
+
+
+LOGIN USER
+File: server/login-user.php
+
+Client request JSON:
+{
+	"userId": string,
+	"password": string
+}
+
+Server response JSON:
+{
+	"success": boolean,
+	"message": string,
+	"user": {
+		"userId": string,
+		"userName": string,
+		"gamesWon": int,
+		"gamesLost" int,
+		"gamesTied": int
+	}
+}
+Details:
+"user" contains information retrieved from the database for the specified user after a successful login.
+
+
+JOIN GAME
+File: server/join-game.php
+
+Client request JSON:
+{
+	"userId": string
+}
+Details:
+This starts the matchmaking process. If there is an open game, you will join; otherwise, a new game will be created and you will wait for another player to join.
+
+Server response JSON (if game is not full):
+{
+	"success": boolean,
+	"message": string,
+	"loginRequired": boolean,
+	"game": {
+		"gameId": int,
+		"isFull": boolean,
+		"myPlayerNum": int,
+		"players": array [ {
+			"playerNum": int (1 .. n),
+			"playerName": string
+		} ]
+	}
+}
+Details:
+Note that the above response format is what will be returned if the game is NOT yet full, i.e., "game"->"isFull" == false, meaning the game is waiting for players to join. You need to make GET GAME STATE requests periodically to check whether the game is ready to start.
+If "game"->"isFull" == true, meaning the game is ready to start, the response format will be the same as a GET GAME STATE request.
+
+
+GET GAME STATE
+File: server/get-game-state.php
+
+Client request JSON:
+{
+	"userId": string,
+	"gameId": int
+}
+Details:
+This is used to retrieve the game details, typically for an in-progress game. You are only allowed to get status updates for a game in which your logged-in user is a player. These updates will also be used to let you know when it's your turn to make a move.
+This request can also be used to retrieve the final state of a completed game.
+"gameId" is the identifier returned from a JOIN GAME request.
+
+Server response JSON:
+{
+	"success": boolean,
+	"message": string,
+	"loginRequired": boolean,
+	"game": {
+		"gameId": int,
+		"isFull": boolean,
+		"isComplete": boolean,
+		"isTied": boolean,
+		"winningPlayerNum": int or null,
+		"myPlayerNum": int,
+		"players": array [ {
+			"playerNum": int (1 .. n),
+			"playerName": string
+		} ],
+		"turn": {
+			"turnNum": int,
+			"playerNum": int,
+			"timeStarted": int,
+			"timeRemaining": int
+		},
+		"grid": array (3D) [ [ [ int ] ] ]
+	}
+}
+Details:
+"game" fields explained:
+	"gameId": The game identifier.
+	"isFull": If true, the game has the maximum number of players. If "isFull" == true and "isComplete" == false, the game is in progress.
+	"isComplete": If true, the game was ended either due to a win/tie or because a player left the game.
+	"isTied": If true, the game ended in a tie.
+	"winningPlayerNum": If the game is complete and not tied, this will contain the "playerNum" value of the winner. If the game is not complete or was tied, this field will be null.
+	"myPlayerNum": This is the turn-order number of your logged-in user. You can compare this value to "playerNum" fields in other parts of the JSON response.
+	"players": This is an array of players in the game.
+		"playerNum": This is the turn-order of a given player, in range (1 .. n). Player number is also used as a player identifier in the "game" fields. We don't reveal user IDs of other players for security reasons.
+		"playerName": This is the player's display name.
+	"turn": This contains information about the current game turn.
+		"turnNum": Ordinal turn number, in range (1 .. n). You probably don't need to do anything with this, but it's provided for reference.
+		"playerNum": Number of the player whose turn it currently is. You should compare this against "game"->"myPlayerNum" to see if your user can take a turn.
+		"timeStarted": This is the date/time the player started their turn. This will be a UNIX timestamp, i.e., number of seconds since 1970-1-1 00:00:00 UTC.
+		"timeRemaining": This is the number of seconds remaining until the player forfeits their turn.
+	"grid": This is a 3-dimensional array representing the game board. You can access a given grid space with array[x][y][z] coordinates. Each coordinate is in range (0 .. 2) due to using a 3x3x3 grid (unless the GAME_GRID_LEN constant is modified in game.php on the server). Empty cells will be set to 0, while used cells will have the relevant player number.
+
+
+SUBMIT MOVE
+File: server/submit-move.php
+
+Client request JSON:
+{
+	"userId": string,
+	"gameId": int,
+	"moveCoords": array [int, int, int]
+}
+Details:
+"moveCoords" is an array of 3 integers representing the (x, y, z) coordinates of the game board space your player wishes to take.
+Each coordinate value should be in range (0 .. n-1) where n is the game grid length (3 by default, for a 3x3x3 grid).
+
+Server response JSON:
+The response will be the same as a GET GAME STATE request.
+
+
+LEAVE GAME
+File: leave-game.php
+
+Client request JSON:
+{
+	"userId": string,
+	"gameId": int
+}
+Details:
+This is used when a player wants to stop playing a game before it's complete.
+If the game is not yet full or no moves have been played, the game will be closed without counting toward wins/losses/ties. Otherwise, it will count as a loss for the leaving player and a win for the other player. If the server is configured for more than 2 players per game, the leaving player may receive a loss in their user stats but the other players will not receive a win/loss/tie for that game.
+
+Server response JSON:
+{
+	"success": boolean,
+	"message": string,
+	"loginRequired": boolean,
+	"gameLost": boolean
+}
+Details:
+"gameLost" indicates whether the player received a loss for leaving the game.
+
+
+CHANGE USER PASSWORD
+File: server/change-user-password.php
+
+Client request JSON:
+{
+    "userId": string,
+    "passwordCurrent": string,
+    "passwordNew": string
+}
+Details:
+The user doesn't need to be logged in before making this request, but will be considered logged in if it succeeds. New and current passwords must be different. New password is subject to the usual password validation requirements.
+
+Server response JSON:
+{
+	"success": boolean,
+	"message": string
+}
+
+
+GET USER GAMES
+File: server/get-user-games.php
+
+Client request JSON:
+{
+	"userId": string
+}
+
+Server response JSON:
+{
+    "success": boolean,
+    "message": string,
+    "loginRequired": boolean,
+    "games": {
+        "won": array [ int ],
+        "lost": array [ int ],
+        "tied": array [ int ]
+    }
+}
+Details:
+"games" contains arrays of game IDs that the user played in, categorized by whether they won, lost, or tied. Each array may be empty or contain multiple game IDs. You can use these game IDs with the GET GAME STATE request to get info about your previous games.
+
+
+LOGOUT USER
+File: server/logout-user.php
+
+Client request JSON:
+{
+	"userId": string
+}
+Details:
+Marks the user as logged out, assuming the user is currently logged in.
+
+Server response JSON:
+{
+    "success": boolean,
+    "message": string
+}
+Details:
+This request will never fail unless the "userId" field is not sent or there is a database error. If an invalid "userId" is sent or the specified user is not logged in, nothing will be changed in the database. If the user was logged in, their login timestamp will be updated to be far enough in the past that they would be considered timed out.
